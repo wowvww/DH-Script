@@ -1,11 +1,11 @@
 {
   "latest_version": "4.2.5",
-  "update_url": "https://raw.githubusercontent.com/wowwww/DH-Script/main/DH.lua",
+  "update_url": "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/DH.lua",
   "chat_messages": [
     {
-      "date": "10.09.2026 01:50",
+      "date": "10.09.2026 02:00",
       "author": "Deo",
-      "text": "Чат успешно подключен!"
+      "text": "Привет! Это первое тестовое сообщение в чате."
     }
   ]
 }
