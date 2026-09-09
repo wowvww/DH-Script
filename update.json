@@ -1,11 +1,23 @@
 {
-  "latest_version": "4.2.5",
-  "update_url": "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/DH.lua",
-  "chat_messages": [
+  "latest_version": "4.2.6",
+  "update_url": "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/dh.lua",
+  "feed_items": [
     {
-      "date": "10.09.2026 02:00",
+      "type": "update",
+      "version": "1.1",
+      "date": "10.09.2026",
+      "text": "Крупное обновление функционала интерфейса.",
+      "changes": [
+        "Добавлено отдельное окно уведомлений",
+        "Исправлены баги с автоспавном",
+        "Оптимизирован рендеринг граффити"
+      ]
+    },
+    {
+      "type": "msg",
+      "date": "09.09.2026",
       "author": "Deo",
-      "text": "Привет! Это первое тестовое сообщение в чате."
+      "text": "Привет! Если возникнут проблемы с лаунчером, пишите в телеграм."
     }
   ]
 }
