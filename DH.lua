@@ -5,10 +5,13 @@ script_authors('Deo')
 local sampev    = require 'lib.samp.events'
 local imgui     = require 'mimgui'
 local encoding  = require 'encoding'
+local effil     = require 'effil'
 encoding.default = 'UTF-8'
 local cyr = encoding.CP1251
 
 require 'sampfuncs'
+
+local RAW_JSON_URL = "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/update.json"
 
 local VK_C = 0x43
 local is_c_pressed = false
@@ -17,6 +20,20 @@ local window
 local graffitiFont = renderCreateFont("ShellyAllegroC", 8, 5)
 local zakladkaFont  = renderCreateFont("ShellyAllegroC", 8, 5)
 local nextAutoClick = 0
+
+-- Данные автообновления и чата
+local chat_messages = {}
+local is_checking = false
+
+-- Асинхронный HTTP-запрос (чтобы игра не зависала)
+local fetch_url = effil.thread(function(url)
+    local requests = require 'requests'
+    local response = requests.get(url)
+    if response and response.status_code == 200 then
+        return response.text
+    end
+    return nil
+end)
 
 local gangs = {
     { name = "The Rifa", color = 0xFF6666FF },
@@ -105,6 +122,56 @@ if type(settings.zakladka_render_enabled) ~= 'boolean' then settings.zakladka_re
 
 local function save_settings()
     jsoncfg.save(settings, generate_path('config/DH.json'))
+end
+
+-- ======================= АВТООБНОВЛЕНИЕ И ЧАТ =======================
+
+function download_update(url)
+    lua_thread.create(function()
+        local runner = fetch_url(url)
+        while runner:status() == "running" do wait(50) end
+
+        local status, code = runner:get()
+        if status and code then
+            local file_path = script.this.path
+            local f = io.open(file_path, "wb")
+            if f then
+                f:write(code)
+                f:close()
+                sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
+                reloadScript()
+            end
+        else
+            sampAddChatMessage(cyr("[DH] Ошибка при скачивании обновления."), 0xFF0000)
+        end
+    end)
+end
+
+function check_updates_and_chat()
+    if is_checking then return end
+    is_checking = true
+
+    lua_thread.create(function()
+        local runner = fetch_url(RAW_JSON_URL)
+        while runner:status() == "running" do wait(50) end
+
+        local status, result = runner:get()
+        is_checking = false
+
+        if status and result then
+            local ok, data = pcall(decodeJson, result)
+            if ok and type(data) == "table" then
+                if type(data.chat_messages) == "table" then
+                    chat_messages = data.chat_messages
+                end
+
+                if data.latest_version and data.latest_version ~= script.this.version then
+                    sampAddChatMessage(cyr(string.format("[DH] Доступно обновление v%s! Начинаю загрузку...", data.latest_version)), 0x00FF00)
+                    download_update(data.update_url)
+                end
+            end
+        end
+    end)
 end
 
 -- ======================= РЕКОННЕКТ =======================
@@ -648,6 +715,34 @@ local newFrame = imgui.OnFrame(
             imgui.EndTabItem()
         end
 
+        if imgui.BeginTabItem('Чат') then
+            imgui.Spacing()
+            imgui.SectionTitle('Сообщения от разработчика')
+            imgui.TextDisabled('Здесь выводиться важные обновления и объявления.')
+            imgui.Spacing()
+
+            imgui.BeginChild('##dev_chat_window', imgui.ImVec2(-1, 160), true)
+            if #chat_messages == 0 then
+                imgui.TextDisabled(is_checking and 'Загрузка сообщений...' or 'Сообщений пока нет.')
+            else
+                for _, msg in ipairs(chat_messages) do
+                    imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), string.format("[%s]", msg.date or ''))
+                    imgui.SameLine()
+                    imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), string.format("%s:", msg.author or 'Dev'))
+                    imgui.SameLine()
+                    imgui.TextWrapped(msg.text or '')
+                end
+            end
+            imgui.EndChild()
+
+            imgui.Spacing()
+            if imgui.Button('Обновить сообщения##chat_refresh', imgui.ImVec2(-1, 24)) then
+                check_updates_and_chat()
+            end
+
+            imgui.EndTabItem()
+        end
+
         imgui.EndTabBar()
 
         imgui.End()
@@ -737,6 +832,9 @@ end
 function main()
     while not isSampAvailable() do wait(0) end
     sampAddChatMessage(cyr('[DH] загружен'), 0xffcccccc)
+
+    -- Автоматическая проверка сообщений и обновлений при старте
+    check_updates_and_chat()
 
     sampRegisterChatCommand('dh', function()
         window[0] = not window[0]
