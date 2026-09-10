@@ -1,4 +1,4 @@
-local CURRENT_VERSION = '4.2.9' --спайди гей
+local CURRENT_VERSION = '5.0' --спайди гей
 
 script_name('DH')
 script_version(CURRENT_VERSION)
