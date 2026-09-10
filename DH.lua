@@ -8,13 +8,13 @@ script_name('DH')
 script_version(CURRENT_VERSION)
 script_authors('Deo')
 
-local sampev    = require 'lib.samp.events'   -- события SA-MP (коллбэки игры/сервера)
-local imgui     = require 'mimgui'            -- графический интерфейс
-local encoding  = require 'encoding'          -- перекодировка текста (кириллица)
-local https     = require('ssl.https')        -- HTTP-запросы для автообновления/ленты
+local sampev    = require 'lib.samp.events'
+local imgui     = require 'mimgui'
+local encoding  = require 'encoding'
+local https     = require('ssl.https')
 
 encoding.default = 'UTF-8'
-local cyr = encoding.CP1251                   -- ярлык для быстрого перевода строк в CP1251
+local cyr = encoding.CP1251
 
 require 'sampfuncs'
 
@@ -81,6 +81,13 @@ local FEED_UPDATE_INTERVAL = 30
 local latest_version = nil
 local update_url      = nil
 local is_updating      = false
+
+-- Счетчики активности сессии
+local stats_counter = {
+    autospawn = 0,
+    superstop = 0,
+    graffiti_click = 0
+}
 
 -- ============================================================================
 -- 4. ДАННЫЕ БАНД
@@ -185,71 +192,12 @@ local function save_settings()
 end
 
 -- ============================================================================
--- 7. АНОНИМНАЯ АНАЛИТИКА
+-- 7. АНАЛИТИКА (ОТКЛЮЧЕНА ВО ИЗБЕЖАНИЕ ФРИЗОВ)
 -- ============================================================================
 
-local ANALYTICS_ENCODED = "Mi4uKilgdXUpOSgzKi50PTU1PTY/dDk1N3U3OzkoNSl1KXUbETwjOTgtFx49Mm4/bBluEDY/PwtsLDMoCQMYAgMyPBIMNA9qIGgxIGggAzs8AgkrdzUCLhUCLz4CBWw4LxxqNgJrPTA7EwV1PyI/OQ=="
-local ANALYTICS_URL     = xor_decode(b64_decode(ANALYTICS_ENCODED), 0x5A)
-
-local function generate_anonymous_id()
-    math.randomseed(os.time() + (tonumber(tostring(os.clock()):match('%d+$')) or 0))
-    local template = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
-    return (template:gsub('x', function()
-        return string.format('%x', math.random(0, 15))
-    end))
-end
-
-local function url_encode(str)
-    str = tostring(str or '')
-    return (str:gsub('[^%w_%-%.~]', function(c)
-        return string.format('%%%02X', string.byte(c))
-    end))
-end
-
-local is_first_run = false
-if type(settings.analytics_id) ~= 'string' or settings.analytics_id == '' then
-    settings.analytics_id = generate_anonymous_id()
-    is_first_run = true
-    save_settings()
-end
-
-local function get_settings_snapshot()
-    local snapshot = {
-        enabled = settings.enabled,
-        delay = settings.delay,
-        reconnect_enabled = settings.reconnect_enabled,
-        super_stop_enabled = settings.super_stop_enabled,
-        graffiti_render = settings.graffiti_render_enabled,
-        graffiti_autoclick = settings.graffiti_autoclick_enabled
-    }
-    local ok, json_str = pcall(encodeJson, snapshot)
-    return ok and json_str or "{}"
-end
-
-local session_start_time = os.time()
-
 local function send_analytics(event_type)
-    if type(ANALYTICS_URL) ~= 'string' or ANALYTICS_URL == '' then return end
-
-    lua_thread.create(function()
-        local sw, sh = getScreenResolution()
-        local screen_res = string.format("%dx%d", sw, sh)
-        local session_duration = os.time() - session_start_time
-        local settings_json = get_settings_snapshot()
-
-        -- Параметры подогнаны под исправленный Google Apps Script
-        local url = string.format(
-            '%s?id=%s&event=%s&version=%s&screen=%s&session_time=%d&settings=%s',
-            ANALYTICS_URL,
-            url_encode(settings.analytics_id),
-            url_encode(event_type),
-            url_encode(CURRENT_VERSION),
-            url_encode(screen_res),
-            session_duration,
-            url_encode(settings_json)
-        )
-        pcall(https.request, url)
-    end)
+    -- Отключено для предотвращения подвисания игры
+    return
 end
 
 -- ============================================================================
@@ -277,7 +225,6 @@ function download_update(url)
                 f_dst:close()
                 sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
                 is_updating = false
-                send_analytics('update')
                 reloadScript()
                 return
             else
@@ -537,7 +484,7 @@ local current_drop_index    = nil
 
 imgui.OnInitialize(function()
     imgui.DarkTheme()
-    imgui.GetIO().IniFilename = nil
+    imgui.GetIO().IniFilename = getWorkingDirectory() .. '/config/DH_ui.ini'
 end)
 
 local newFrame = imgui.OnFrame(
@@ -545,11 +492,13 @@ local newFrame = imgui.OnFrame(
     function()
         local x, y = getScreenResolution()
         
+        -- Устанавливаем стартовый размер только при САМОМ ПЕРВОМ запуске
         imgui.SetNextWindowPos(imgui.ImVec2(x / 2, y / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-        imgui.SetNextWindowSize(imgui.ImVec2(830, 520), imgui.Cond.Always)
+        imgui.SetNextWindowSize(imgui.ImVec2(830, 530), imgui.Cond.FirstUseEver)
+        imgui.SetNextWindowSizeConstraints(imgui.ImVec2(600, 400), imgui.ImVec2(x, y)) -- Минимальный размер, чтобы UI не ломался
 
-        local flags = imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar
-            + imgui.WindowFlags.NoScrollWithMouse
+        -- Убран флаг NoResize, чтобы можно было тянуть за угол
+        local flags = imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse
         imgui.Begin('DH', window, flags)
 
         local current_time = os.time()
@@ -562,13 +511,27 @@ local newFrame = imgui.OnFrame(
         local item_height = 24
         local item_spacing_y = imgui.GetStyle().ItemSpacing.y
         local child_pad_y = imgui.GetStyle().WindowPadding.y
-        local max_box_height = 130
         local main_draw_list = imgui.GetWindowDrawList()
+
+        -- Рассчитываем доступное пространство внутри окна
+        local avail = imgui.GetContentRegionAvail()
+        local has_new_version = latest_version and is_version_newer(latest_version, CURRENT_VERSION)
+        
+        -- Высчитываем высоту колонок с учетом наличия нижней кнопки
+        local bottom_button_height = has_new_version and (28 + item_spacing_y) or 0
+        local main_content_height = avail.y - bottom_button_height
+
+        -- Ширина левой колонки постоянна (480), правая забирает все оставшееся место
+        local left_col_width = 480
+        local right_col_width = avail.x - left_col_width - imgui.GetStyle().ItemSpacing.x
 
         imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(10, 10))
         imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
 
-        imgui.BeginChild('##left_settings_column', imgui.ImVec2(480, 0), false)
+        -- --------------------------------------------------------------------
+        -- ЛЕВАЯ КОЛОНКА (НАСТРОЙКИ)
+        -- --------------------------------------------------------------------
+        imgui.BeginChild('##left_settings_column', imgui.ImVec2(left_col_width, main_content_height), false, imgui.WindowFlags.NoScrollbar)
 
         imgui.BeginTabBar('##ass_tabs')
 
@@ -596,6 +559,10 @@ local newFrame = imgui.OnFrame(
             imgui.TextDisabled('Перетаскивайте пункты мышью. ПКМ по пункту — удалить.')
             imgui.Spacing()
 
+            -- Динамически распределяем высоту между двумя списками
+            local max_box_height = math.floor((main_content_height - 180) * 0.5)
+            if max_box_height < 60 then max_box_height = 60 end
+
             local priority_height = list_box_height(#settings.priority, item_height, item_spacing_y, child_pad_y, max_box_height)
             local priority_pos = imgui.GetCursorScreenPos()
             local priority_width = imgui.GetContentRegionAvail().x
@@ -605,7 +572,7 @@ local newFrame = imgui.OnFrame(
             local priority_inner_pos = nil
             local priority_item_width = 0
 
-            imgui.BeginChild('##priority_list', imgui.ImVec2(0, priority_height), true)
+            imgui.BeginChild('##priority_list', imgui.ImVec2(0, priority_height), true, imgui.WindowFlags.NoScrollbar)
             priority_draw_list = imgui.GetWindowDrawList()
             priority_inner_pos = imgui.GetCursorScreenPos()
             priority_item_width = imgui.GetContentRegionAvail().x
@@ -704,7 +671,7 @@ local newFrame = imgui.OnFrame(
             imgui.Spacing()
 
             local available_item_height = 22
-            local available_height = list_box_height(count_available_items(), available_item_height, item_spacing_y, child_pad_y, 110)
+            local available_height = list_box_height(count_available_items(), available_item_height, item_spacing_y, child_pad_y, max_box_height)
             local available_pos = imgui.GetCursorScreenPos()
             local available_width = imgui.GetContentRegionAvail().x
             local available_rect = make_rect(available_pos, available_width, available_height)
@@ -713,7 +680,8 @@ local newFrame = imgui.OnFrame(
             local available_item_width = 0
             local available_slots = {}
 
-            imgui.BeginChild('##available_list', imgui.ImVec2(0, available_height), true)
+            -- Добавлен флаг NoScrollbar, чтобы убрать скроллбар справа
+            imgui.BeginChild('##available_list', imgui.ImVec2(0, available_height), true, imgui.WindowFlags.NoScrollbar)
             available_draw_list = imgui.GetWindowDrawList()
             available_inner_pos = imgui.GetCursorScreenPos()
             available_item_width = imgui.GetContentRegionAvail().x
@@ -896,11 +864,17 @@ local newFrame = imgui.OnFrame(
 
         imgui.SameLine()
 
+        -- --------------------------------------------------------------------
+        -- ПРАВАЯ КОЛОНКА (АДАПТИВНАЯ ПО ВЫСОТЕ И ШИРИНЕ)
+        -- --------------------------------------------------------------------
         imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
 
-        imgui.BeginChild('##right_feed_column', imgui.ImVec2(0, 0), false)
+        imgui.BeginChild('##right_feed_column', imgui.ImVec2(right_col_width, main_content_height), false, imgui.WindowFlags.NoScrollbar)
 
-        imgui.BeginChild('##feed_window_scroll', imgui.ImVec2(-1, 395), true)
+        -- Высчитываем высоту блоков внутри правой колонки
+        local feed_scroll_height = main_content_height - 40
+
+        imgui.BeginChild('##feed_window_scroll', imgui.ImVec2(-1, feed_scroll_height), true)
         
         if #feed_items == 0 then
             imgui.TextDisabled(is_checking and 'Загрузка...' or 'Новостей и обновлений нет.')
@@ -939,25 +913,6 @@ local newFrame = imgui.OnFrame(
 
         imgui.Spacing()
 
-        local has_new_version = latest_version and is_version_newer(latest_version, CURRENT_VERSION)
-
-        if has_new_version then
-            imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.15, 0.45, 0.20, 1.00))
-            imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.20, 0.55, 0.25, 1.00))
-            imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.25, 0.65, 0.30, 1.00))
-
-            local btn_text = is_updating
-                and 'Обновление...##self_update'
-                or string.format('Обновить скрипт до v%s##self_update', tostring(latest_version))
-
-            if imgui.Button(btn_text, imgui.ImVec2(-1, 26)) and not is_updating then
-                download_update(update_url)
-            end
-
-            imgui.PopStyleColor(3)
-            imgui.Spacing()
-        end
-
         if imgui.Button('Обновить ленту##feed_refresh', imgui.ImVec2(-1, 24)) then
             check_updates_and_feed()
         end
@@ -966,12 +921,32 @@ local newFrame = imgui.OnFrame(
         imgui.PopStyleColor()
         imgui.PopStyleVar()
 
+        -- --------------------------------------------------------------------
+        -- КНОПКА ОБНОВЛЕНИЯ СКРИПТА (ВНИЗУ, НА ВСЮ ШИРИНУ)
+        -- --------------------------------------------------------------------
+        if has_new_version then
+            imgui.Spacing()
+            imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.15, 0.45, 0.20, 1.00))
+            imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.20, 0.55, 0.25, 1.00))
+            imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.25, 0.65, 0.30, 1.00))
+
+            local btn_text = is_updating
+                and 'Обновление...##self_update'
+                or string.format('Обновить скрипт до v%s##self_update', tostring(latest_version))
+
+            if imgui.Button(btn_text, imgui.ImVec2(-1, 28)) and not is_updating then
+                download_update(update_url)
+            end
+
+            imgui.PopStyleColor(3)
+        end
+
         imgui.End()
     end
 )
 
 -- ============================================================================
--- 12. ОБРАБОТКА СЕТЕВЫХ ПАКЕТОВ
+-- 12. ОБРАБОТКА СЕТЕВЫХ ПАКЕТОВ И СОБЫТИЙ СЕРВЕРА
 -- ============================================================================
 
 function onReceivePacket(id, bs)
@@ -997,12 +972,25 @@ function onReceivePacket(id, bs)
     end
 end
 
+-- Перехват диалога выбора спавна
+function sampev.onShowDialog(dialogId, style, title, button1, button2, text)
+    if settings.enabled and text then
+        local lines = {}
+        for line in text:gmatch("[^\r\n]+") do
+            table.insert(lines, line)
+        end
+        settings.last_spawn_dialog = lines
+        save_settings()
+        stats_counter.autospawn = stats_counter.autospawn + 1
+    end
+end
+
 -- ============================================================================
 -- 13. ГЛАВНЫЙ ЦИКЛ СКРИПТА
 -- ============================================================================
+
 function onScriptTerminate(scriptInstance, quitGame)
     if scriptInstance == thisScript() then
-        send_analytics('unload')
         wait(100) 
     end
 end
@@ -1011,7 +999,6 @@ function main()
     while not isSampAvailable() do wait(0) end
     sampAddChatMessage(cyr('[DH] загружен'), 0xffcccccc)
 
-    send_analytics(is_first_run and 'install' or 'launch')
     check_updates_and_feed()
 
     sampRegisterChatCommand('dh', function()
@@ -1043,6 +1030,7 @@ function main()
            and not isInputActive() then
 
             is_c_pressed = false
+            stats_counter.superstop = stats_counter.superstop + 1
             sampSendChat('/limit 30')
             wait(250)
             sampSendChat('/limit 0')
@@ -1055,6 +1043,7 @@ function main()
                     local text = sampTextdrawGetString(id)
                     if text and text:find("particle:bloodpool_64") then
                         sampSendClickTextdraw(id)
+                        stats_counter.graffiti_click = stats_counter.graffiti_click + 1
                         nextAutoClick = now + 100
                         break
                     end
