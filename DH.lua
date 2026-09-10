@@ -2,7 +2,7 @@
 -- 1. МЕТАДАННЫЕ И ПОДКЛЮЧЕНИЕ БИБЛИОТЕК
 -- ============================================================================
 
-local CURRENT_VERSION = '5.1'
+local CURRENT_VERSION = '5.1' --Spidey Gey
 
 script_name('DH')
 script_version(CURRENT_VERSION)
