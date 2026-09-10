@@ -2,7 +2,7 @@
 -- 1. МЕТАДАННЫЕ И ПОДКЛЮЧЕНИЕ БИБЛИОТЕК
 -- ============================================================================
 
-local CURRENT_VERSION = '5.1' --Spidey Gey
+local CURRENT_VERSION = '5.1' -- Spidey gey
 
 script_name('DH')
 script_version(CURRENT_VERSION)
@@ -19,47 +19,10 @@ local cyr = encoding.CP1251
 require 'sampfuncs'
 
 -- ============================================================================
--- 2. ДЕОБФУСКАЦИЯ ССЫЛКИ АВТООБНОВЛЕНИЯ
+-- 2. ССЫЛКА НА ФАЙЛ ОБНОВЛЕНИЙ И НОВОСТНОЙ ЛЕНТЫ
 -- ============================================================================
 
-local function b64_decode(data)
-    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    data = string.gsub(data, '[^'..b..'=]', '')
-    return (data:gsub('.', function(x)
-        if x == '=' then return '' end
-        local r, f = '', (b:find(x) - 1)
-        for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and '1' or '0') end
-        return r
-    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-        if #x ~= 8 then return '' end
-        local c = 0
-        for i = 1, 8 do c = c + (x:sub(i, i) == '1' and 2 ^ (8 - i) or 0) end
-        return string.char(c)
-    end))
-end
-
-local function xor_byte(a, b)
-    local result, bit_val = 0, 1
-    while a > 0 or b > 0 do
-        local a_bit, b_bit = a % 2, b % 2
-        if a_bit ~= b_bit then result = result + bit_val end
-        a, b = (a - a_bit) / 2, (b - b_bit) / 2
-        bit_val = bit_val * 2
-    end
-    return result
-end
-
-local function xor_decode(data, key)
-    local result = {}
-    for i = 1, #data do
-        local byte = string.byte(data, i)
-        result[i] = string.char(xor_byte(byte, key))
-    end
-    return table.concat(result)
-end
-
-local ENCODED_URL  = "Mi4uKilgdXUoOy10PTMuMi84Lyk/KDk1NC4/NC50OTU3dS01LSwtLXUeEncJOSgzKi51KD88KXUyPzs+KXU3OzM0dS8qPjsuP3QwKTU0"
-local RAW_JSON_URL = xor_decode(b64_decode(ENCODED_URL), 0x5A)
+local RAW_JSON_URL = "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/update.json"
 
 -- ============================================================================
 -- 3. КОНСТАНТЫ И ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
