@@ -975,10 +975,19 @@ end
 -- Перехват диалога выбора спавна
 function sampev.onShowDialog(dialogId, style, title, button1, button2, text)
     if settings.enabled and text then
+        text = cyr:decode(text) -- перекодируем текст диалога из CP1251 в рабочую UTF-8
+
         local lines = {}
         for line in text:gmatch("[^\r\n]+") do
-            table.insert(lines, line)
+            line = line:gsub("{%x%x%x%x%x%x}", "")   -- убираем цветовые теги {RRGGBB}
+            line = line:gsub("^%[%d+%]%s*", "")       -- убираем префикс "[1] "
+            line = line:match("^%s*(.-)%s*$")         -- обрезаем пробелы
+
+            if line ~= '' then
+                table.insert(lines, line)
+            end
         end
+
         settings.last_spawn_dialog = lines
         save_settings()
         stats_counter.autospawn = stats_counter.autospawn + 1
