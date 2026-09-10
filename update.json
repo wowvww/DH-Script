@@ -14,6 +14,12 @@
       "date": "10.09.2026",
       "author": "Deo",
       "text": "test."
+    },
+    {
+      "type": "msg",
+      "date": "10.09.2026",
+      "author": "Deo",
+      "text": "123."
     }
   ]
 }
