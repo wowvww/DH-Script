@@ -1,5 +1,7 @@
+local CURRENT_VERSION = '4.2.8'
+
 script_name('DH')
-script_version('4.2.7')
+script_version(CURRENT_VERSION)
 script_authors('Deo')
 
 local sampev    = require 'lib.samp.events'
@@ -27,6 +29,11 @@ local feed_items = {}
 local is_checking = false
 local last_feed_update = 0
 local FEED_UPDATE_INTERVAL = 30 -- интервал автообновления в секундах
+
+-- Данные автообновления скрипта
+local latest_version = nil
+local update_url = nil
+local is_updating = false
 
 local gangs = {
     { name = "The Rifa", color = 0xFF6666FF },
@@ -120,28 +127,86 @@ end
 -- ======================= АВТООБНОВЛЕНИЕ И ЛЕНТА =======================
 
 function download_update(url)
-    local temp_script = getWorkingDirectory() .. '\\update_temp.lua'
+    if is_updating then return end
+    if type(url) ~= 'string' or url == '' then
+        sampAddChatMessage(cyr("[DH] Ссылка на обновление недоступна."), 0xFF0000)
+        return
+    end
+
+    is_updating = true
+    sampAddChatMessage(cyr("[DH] Скачивание обновления..."), 0xffcccccc)
+
+    -- ВАЖНО: временный файл НЕ должен иметь расширение .lua, иначе MoonLoader
+    -- может подхватить его как отдельный (второй) скрипт, если он не удалится
+    -- вовремя (сбой записи/чтения, антивирус и т.п.) — из-за этого скрипт
+    -- запускался дважды.
+    local temp_script = getWorkingDirectory() .. '\\update_temp.dhtmp'
+
+    -- на случай, если после прошлого неудачного обновления что-то осталось
+    pcall(os.remove, temp_script)
+
     downloadUrlToFile(url, temp_script, function(id, status, pth)
+        local function cleanup()
+            pcall(os.remove, temp_script)
+        end
+
         if status == 200 then
-            local file_path = script.this.path
             local f_src = io.open(temp_script, 'r')
             if f_src then
                 local code = f_src:read('*a')
                 f_src:close()
-                os.remove(temp_script)
-                
-                local f_dst = io.open(file_path, 'w')
-                if f_dst then
-                    f_dst:write(code)
-                    f_dst:close()
-                    sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
-                    reloadScript()
+                cleanup()
+
+                if type(code) == 'string' and #code > 0 then
+                    local file_path = script.this.path
+                    local f_dst = io.open(file_path, 'w')
+                    if f_dst then
+                        f_dst:write(code)
+                        f_dst:close()
+                        sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
+                        is_updating = false
+                        reloadScript()
+                        return
+                    else
+                        sampAddChatMessage(cyr("[DH] Не удалось записать файл скрипта."), 0xFF0000)
+                    end
+                else
+                    sampAddChatMessage(cyr("[DH] Скачанный файл пуст или повреждён."), 0xFF0000)
                 end
+            else
+                sampAddChatMessage(cyr("[DH] Не удалось прочитать скачанный файл."), 0xFF0000)
+                cleanup()
             end
         else
             sampAddChatMessage(cyr("[DH] Не удалось скачать файл обновления."), 0xFF0000)
+            cleanup()
         end
+
+        is_updating = false
     end)
+end
+
+-- Сравнивает версии вида "4.2.7". Возвращает true, если v1 > v2
+local function is_version_newer(v1, v2)
+    if type(v1) ~= 'string' or type(v2) ~= 'string' then return false end
+
+    local function split(v)
+        local parts = {}
+        for num in v:gmatch('%d+') do
+            table.insert(parts, tonumber(num))
+        end
+        return parts
+    end
+
+    local p1, p2 = split(v1), split(v2)
+    local len = math.max(#p1, #p2)
+
+    for i = 1, len do
+        local a, b = p1[i] or 0, p2[i] or 0
+        if a > b then return true end
+        if a < b then return false end
+    end
+    return false
 end
 
 function check_updates_and_feed()
@@ -157,6 +222,12 @@ function check_updates_and_feed()
             if ok and type(data) == "table" then
                 if type(data.feed_items) == "table" then
                     feed_items = data.feed_items
+                end
+                if type(data.latest_version) == "string" then
+                    latest_version = data.latest_version
+                end
+                if type(data.update_url) == "string" then
+                    update_url = data.update_url
                 end
             end
         end
@@ -771,6 +842,26 @@ local newFrame = imgui.OnFrame(
         imgui.EndChild()
 
         imgui.Spacing()
+
+        local has_new_version = latest_version and is_version_newer(latest_version, CURRENT_VERSION)
+
+        if has_new_version then
+            imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.15, 0.45, 0.20, 1.00))
+            imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.20, 0.55, 0.25, 1.00))
+            imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.25, 0.65, 0.30, 1.00))
+
+            local btn_text = is_updating
+                and cyr('Обновление...##self_update')
+                or cyr(string.format('Обновить скрипт до v%s##self_update', tostring(latest_version)))
+
+            if imgui.Button(btn_text, imgui.ImVec2(-1, 26)) and not is_updating then
+                download_update(update_url)
+            end
+
+            imgui.PopStyleColor(3)
+            imgui.Spacing()
+        end
+
         if imgui.Button('Обновить ленту##feed_refresh', imgui.ImVec2(-1, 24)) then
             check_updates_and_feed()
         end
