@@ -1,4 +1,4 @@
-local CURRENT_VERSION = '4.2.8' --Спайди гей
+local CURRENT_VERSION = '4.2.9' --спайди гей
 
 script_name('DH')
 script_version(CURRENT_VERSION)
@@ -133,50 +133,24 @@ function download_update(url)
     is_updating = true
     sampAddChatMessage(cyr("[DH] Скачивание обновления..."), 0xffcccccc)
 
-    -- ВАЖНО: временный файл НЕ должен иметь расширение .lua, иначе MoonLoader
-    -- может подхватить его как отдельный (второй) скрипт, если он не удалится
-    -- вовремя (сбой записи/чтения, антивирус и т.п.) — из-за этого скрипт
-    -- запускался дважды.
-    local temp_script = getWorkingDirectory() .. '\\update_temp.dhtmp'
-
-    -- на случай, если после прошлого неудачного обновления что-то осталось
-    pcall(os.remove, temp_script)
-
-    downloadUrlToFile(url, temp_script, function(id, status, pth)
-        local function cleanup()
-            pcall(os.remove, temp_script)
-        end
-
-        if status == 200 then
-            local f_src = io.open(temp_script, 'r')
-            if f_src then
-                local code = f_src:read('*a')
-                f_src:close()
-                cleanup()
-
-                if type(code) == 'string' and #code > 0 then
-                    local file_path = script.this.path
-                    local f_dst = io.open(file_path, 'w')
-                    if f_dst then
-                        f_dst:write(code)
-                        f_dst:close()
-                        sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
-                        is_updating = false
-                        reloadScript()
-                        return
-                    else
-                        sampAddChatMessage(cyr("[DH] Не удалось записать файл скрипта."), 0xFF0000)
-                    end
-                else
-                    sampAddChatMessage(cyr("[DH] Скачанный файл пуст или повреждён."), 0xFF0000)
-                end
+    lua_thread.create(function()
+        local result, status = https.request(url)
+        
+        if status == 200 and result and #result > 0 then
+            local file_path = script.this.path
+            local f_dst = io.open(file_path, 'w')
+            if f_dst then
+                f_dst:write(result)
+                f_dst:close()
+                sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
+                is_updating = false
+                reloadScript()
+                return
             else
-                sampAddChatMessage(cyr("[DH] Не удалось прочитать скачанный файл."), 0xFF0000)
-                cleanup()
+                sampAddChatMessage(cyr("[DH] Не удалось записать файл скрипта."), 0xFF0000)
             end
         else
             sampAddChatMessage(cyr("[DH] Не удалось скачать файл обновления."), 0xFF0000)
-            cleanup()
         end
 
         is_updating = false
