@@ -1,19 +1,19 @@
 {
-  "latest_version": "5.0",
+  "latest_version": "5.1",
   "update_url": "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/DH.lua",
   "feed_items": [
     {
       "type": "update",
       "version": "5.0",
       "date": "10.09.2026",
-      "text": "Сделано что бы я могу писать что спайди гей",
-      "changes": ["Спайди кончили в рот", "Спайди вставили 30см дилдо в жопу"]
+      "text": "Добавлены комментарии в код для удобства",
+      "changes": ["Добавлены личные комментарии по всему коду", "Обновлена структура комментариев"]
     },
     {
       "type": "msg",
-      "date": "10.09.2026",
+      "date": "",
       "author": "Deo",
-      "text": "/me вставили дилдо спайди в анал"
+      "text": "Спайди гей"
     }
   ]
 }
