@@ -1,11 +1,11 @@
 script_name('DH')
-script_version('4.2.5')
+script_version('4.2.7')
 script_authors('Deo')
 
 local sampev    = require 'lib.samp.events'
 local imgui     = require 'mimgui'
 local encoding  = require 'encoding'
-local effil     = require 'effil'
+local https     = require('ssl.https')
 encoding.default = 'UTF-8'
 local cyr = encoding.CP1251
 
@@ -16,24 +16,17 @@ local RAW_JSON_URL = "https://raw.githubusercontent.com/wowvww/DH-Script/refs/he
 local VK_C = 0x43
 local is_c_pressed = false
 local window
+local info_window = imgui.new.bool(true) -- Окно новостей/обновлений открыто по умолчанию
 
 local graffitiFont = renderCreateFont("ShellyAllegroC", 8, 5)
 local zakladkaFont  = renderCreateFont("ShellyAllegroC", 8, 5)
 local nextAutoClick = 0
 
--- Данные автообновления и чата
-local chat_messages = {}
+-- Данные обновлений и сообщений
+local feed_items = {}
 local is_checking = false
-
--- Асинхронный HTTP-запрос (чтобы игра не зависала)
-local fetch_url = effil.thread(function(url)
-    local requests = require 'requests'
-    local response = requests.get(url)
-    if response and response.status_code == 200 then
-        return response.text
-    end
-    return nil
-end)
+local last_feed_update = 0
+local FEED_UPDATE_INTERVAL = 30 -- интервал автообновления в секундах
 
 local gangs = {
     { name = "The Rifa", color = 0xFF6666FF },
@@ -87,12 +80,12 @@ local settings = jsoncfg.load({
     delay = 5,
     last_spawn_dialog = {},
 
-    reconnect_enabled      = false,
-    reconnect_delay        = 3,
-    reconnect_retry_delay  = 5,
-    reconnect_use_timeout  = true,
-    reconnect_timeout      = 8,
-    reconnect_on_ban       = false,
+    reconnect_enabled     = false,
+    reconnect_delay       = 3,
+    reconnect_retry_delay = 5,
+    reconnect_use_timeout = true,
+    reconnect_timeout     = 8,
+    reconnect_on_ban      = false,
     reconnect_delay_banned = 60,
 
     super_stop_enabled  = false,
@@ -124,50 +117,46 @@ local function save_settings()
     jsoncfg.save(settings, generate_path('config/DH.json'))
 end
 
--- ======================= АВТООБНОВЛЕНИЕ И ЧАТ =======================
+-- ======================= АВТООБНОВЛЕНИЕ И ЛЕНТА =======================
 
 function download_update(url)
-    lua_thread.create(function()
-        local runner = fetch_url(url)
-        while runner:status() == "running" do wait(50) end
-
-        local status, code = runner:get()
-        if status and code then
+    local temp_script = getWorkingDirectory() .. '\\update_temp.lua'
+    downloadUrlToFile(url, temp_script, function(id, status, pth)
+        if status == 200 then
             local file_path = script.this.path
-            local f = io.open(file_path, "wb")
-            if f then
-                f:write(code)
-                f:close()
-                sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
-                reloadScript()
+            local f_src = io.open(temp_script, 'r')
+            if f_src then
+                local code = f_src:read('*a')
+                f_src:close()
+                os.remove(temp_script)
+                
+                local f_dst = io.open(file_path, 'w')
+                if f_dst then
+                    f_dst:write(code)
+                    f_dst:close()
+                    sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
+                    reloadScript()
+                end
             end
         else
-            sampAddChatMessage(cyr("[DH] Ошибка при скачивании обновления."), 0xFF0000)
+            sampAddChatMessage(cyr("[DH] Не удалось скачать файл обновления."), 0xFF0000)
         end
     end)
 end
 
-function check_updates_and_chat()
+function check_updates_and_feed()
     if is_checking then return end
     is_checking = true
 
     lua_thread.create(function()
-        local runner = fetch_url(RAW_JSON_URL)
-        while runner:status() == "running" do wait(50) end
-
-        local status, result = runner:get()
+        local result, status = https.request(RAW_JSON_URL)
         is_checking = false
 
-        if status and result then
+        if status == 200 and result then
             local ok, data = pcall(decodeJson, result)
             if ok and type(data) == "table" then
-                if type(data.chat_messages) == "table" then
-                    chat_messages = data.chat_messages
-                end
-
-                if data.latest_version and data.latest_version ~= script.this.version then
-                    sampAddChatMessage(cyr(string.format("[DH] Доступно обновление v%s! Начинаю загрузку...", data.latest_version)), 0x00FF00)
-                    download_update(data.update_url)
+                if type(data.feed_items) == "table" then
+                    feed_items = data.feed_items
                 end
             end
         end
@@ -216,12 +205,12 @@ local function schedule_reconnect(reason_text, delay_s)
     end)
 end
 
--- Вспомогательные функции
 local function isInputActive()
     return isCursorActive()
         or sampIsChatInputActive()
         or sampIsDialogActive()
         or window[0]
+        or info_window[0]
 end
 
 local function contains(tbl, value)
@@ -369,27 +358,47 @@ imgui.OnInitialize(function()
     imgui.GetIO().IniFilename = nil
 end)
 
+-- Рендер единого окна с отступами от краев
+-- Рендер единого окна (настройки слева, новости справа, без лишних квадратов и отступы)
 local newFrame = imgui.OnFrame(
     function() return window[0] end,
     function()
         local x, y = getScreenResolution()
+        
         imgui.SetNextWindowPos(imgui.ImVec2(x / 2, y / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-        imgui.SetNextWindowSize(imgui.ImVec2(480, 0), imgui.Cond.FirstUseEver)
+        imgui.SetNextWindowSize(imgui.ImVec2(830, 520), imgui.Cond.Always)
 
         local flags = imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar
-            + imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.AlwaysAutoResize
+            + imgui.WindowFlags.NoScrollWithMouse
         imgui.Begin('DH', window, flags)
+
+        -- Фоновое автообновление ленты
+        local current_time = os.time()
+        if current_time - last_feed_update >= FEED_UPDATE_INTERVAL then
+            check_updates_and_feed()
+            last_feed_update = current_time
+        end
 
         local mouse = imgui.GetIO().MousePos
         local item_height = 24
         local item_spacing_y = imgui.GetStyle().ItemSpacing.y
         local child_pad_y = imgui.GetStyle().WindowPadding.y
-        local max_box_height = math.max(180, y * 0.45)
+        local max_box_height = 130
         local main_draw_list = imgui.GetWindowDrawList()
+
+        -- Внутренние отступы для всего содержимого окна
+        imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(10, 10))
+
+        -- 1. Убираем фон (светлый квадрат) у левой колонки с настройками
+        imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
+
+        -- Левая колонка с настройками
+        imgui.BeginChild('##left_settings_column', imgui.ImVec2(480, 0), false)
 
         imgui.BeginTabBar('##ass_tabs')
 
         if imgui.BeginTabItem('Автоспавн') then
+            imgui.Spacing()
 
             if imgui.Checkbox('Включить автоспавн', ass_enabled) then
                 settings.enabled = ass_enabled[0]
@@ -409,7 +418,7 @@ local newFrame = imgui.OnFrame(
             imgui.Spacing()
 
             imgui.SectionTitle('Приоритеты спавна')
-            imgui.TextDisabled('Перетаскивайте пункты мышью. ПКМ по пункту — удалить его из приоритетов.')
+            imgui.TextDisabled('Перетаскивайте пункты мышью. ПКМ по пункту — удалить.')
             imgui.Spacing()
 
             local priority_height = list_box_height(#settings.priority, item_height, item_spacing_y, child_pad_y, max_box_height)
@@ -427,7 +436,6 @@ local newFrame = imgui.OnFrame(
             priority_item_width = imgui.GetContentRegionAvail().x
 
             local visible_priority_count = 0
-
             local dragging_into_priority = (drag_mode == 'available' or drag_mode == 'priority')
                 and point_in_rect(mouse, priority_rect)
 
@@ -511,19 +519,17 @@ local newFrame = imgui.OnFrame(
 
             if visible_priority_count == 0 and drag_mode ~= 'priority' and not placeholder_drawn then
                 imgui.Spacing()
-                imgui.TextDisabled('Список пуст. Перетащите сюда место спавна из списка ниже.')
+                imgui.TextDisabled('Список пуст. Перетащите сюда место спавна.')
             end
 
             imgui.EndChild()
 
             imgui.Spacing()
             imgui.SectionTitle('Последний диалог спавна')
-            imgui.TextDisabled('Перетащите нужное место в список приоритетов выше.')
-            imgui.TextDisabled('Уже добавленные пункты здесь автоматически скрываются.')
             imgui.Spacing()
 
             local available_item_height = 22
-            local available_height = list_box_height(count_available_items(), available_item_height, item_spacing_y, child_pad_y, max_box_height)
+            local available_height = list_box_height(count_available_items(), available_item_height, item_spacing_y, child_pad_y, 110)
             local available_pos = imgui.GetCursorScreenPos()
             local available_width = imgui.GetContentRegionAvail().x
             local available_rect = make_rect(available_pos, available_width, available_height)
@@ -557,7 +563,7 @@ local newFrame = imgui.OnFrame(
                     end
 
                     if imgui.IsItemHovered() and drag_mode == nil then
-                        imgui.SetTooltip('Зажмите ЛКМ и перетащите в список приоритетов.')
+                        imgui.SetTooltip('Зажмите ЛКМ и перетащите в приоритеты.')
                     end
                 end
             end
@@ -565,9 +571,9 @@ local newFrame = imgui.OnFrame(
             if shown == 0 then
                 imgui.Spacing()
                 if #settings.last_spawn_dialog == 0 then
-                    imgui.TextDisabled('Данные появятся после открытия диалога выбора места спавна.')
+                    imgui.TextDisabled('Данные появятся после открытия диалога спавна.')
                 else
-                    imgui.TextDisabled('Все места из последнего диалога уже добавлены в приоритеты.')
+                    imgui.TextDisabled('Все места из диалога уже добавлены.')
                 end
             end
 
@@ -621,7 +627,7 @@ local newFrame = imgui.OnFrame(
                 settings.reconnect_enabled = reconnect_enabled[0]
                 save_settings()
             end
-            imgui.TextDisabled('Переподключает при обрыве связи, кике\nи закрытии соединения сервером (рестарт).\nПопытки бесконечны, пока сервер не поднимется.')
+            imgui.TextDisabled('Переподключает при обрыве связи или кике.')
 
             if settings.reconnect_enabled then
                 imgui.Spacing()
@@ -651,7 +657,6 @@ local newFrame = imgui.OnFrame(
                         save_settings()
                     end
                 end
-                imgui.TextDisabled('Если сервер не поднялся после рестарта,\nскрипт будет пробовать снова и снова,\nбез ограничения по числу попыток.')
 
                 imgui.Spacing()
                 if imgui.Checkbox('Пробовать реконнект и при бане', reconnect_on_ban) then
@@ -689,7 +694,7 @@ local newFrame = imgui.OnFrame(
                 settings.graffiti_render_enabled = graffiti_render_enabled[0]
                 save_settings()
             end
-            imgui.TextDisabled('Рисует линии и подписи до граффити банд на карте.')
+            imgui.TextDisabled('Рисует линии и подписи до граффити банд.')
 
             imgui.Spacing()
             imgui.Separator()
@@ -700,7 +705,7 @@ local newFrame = imgui.OnFrame(
                 if settings.graffiti_autoclick_enabled then nextAutoClick = 0 end
                 save_settings()
             end
-            imgui.TextDisabled('Автоматически кликает на текстдравы\nс граффити (particle:bloodpool_64).')
+            imgui.TextDisabled('Автоматически кликает на текстдравы графити.')
 
             imgui.Spacing()
             imgui.Separator()
@@ -710,101 +715,75 @@ local newFrame = imgui.OnFrame(
                 settings.zakladka_render_enabled = zakladka_render_enabled[0]
                 save_settings()
             end
-            imgui.TextDisabled('Рисует линии и подписи до закладок на карте.')
-
-            imgui.EndTabItem()
-        end
-
-        if imgui.BeginTabItem('Чат') then
-            imgui.Spacing()
-            imgui.SectionTitle('Сообщения от разработчика')
-            imgui.TextDisabled('Здесь выводиться важные обновления и объявления.')
-            imgui.Spacing()
-
-            imgui.BeginChild('##dev_chat_window', imgui.ImVec2(-1, 160), true)
-            if #chat_messages == 0 then
-                imgui.TextDisabled(is_checking and 'Загрузка сообщений...' or 'Сообщений пока нет.')
-            else
-                for _, msg in ipairs(chat_messages) do
-                    imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), string.format("[%s]", msg.date or ''))
-                    imgui.SameLine()
-                    imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), string.format("%s:", msg.author or 'Dev'))
-                    imgui.SameLine()
-                    imgui.TextWrapped(msg.text or '')
-                end
-            end
-            imgui.EndChild()
-
-            imgui.Spacing()
-            if imgui.Button('Обновить сообщения##chat_refresh', imgui.ImVec2(-1, 24)) then
-                check_updates_and_chat()
-            end
+            imgui.TextDisabled('Рисует линии и подписи до закладок.')
 
             imgui.EndTabItem()
         end
 
         imgui.EndTabBar()
+        imgui.EndChild()
+        
+        imgui.PopStyleColor() -- Возвращаем стиль цвета для левой колонки
+
+        imgui.SameLine()
+
+        -- Убираем фон (светлый квадрат) у правой колонки
+        imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
+
+        -- Правая колонка с лентой новостей (без рамки)
+        imgui.BeginChild('##right_feed_column', imgui.ImVec2(0, 0), false)
+
+        imgui.BeginChild('##feed_window_scroll', imgui.ImVec2(-1, 395), true)
+        
+        if #feed_items == 0 then
+            imgui.TextDisabled(is_checking and 'Загрузка...' or 'Новостей и обновлений нет.')
+        else
+            for _, item in ipairs(feed_items) do
+                if item.type == "update" then
+                    if imgui.CollapsingHeader(string.format("Обновление v%s##%s", tostring(item.version or "1.0"), tostring(item.date or ""))) then
+                        imgui.Indent(10)
+                        imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), string.format("Дата: %s", tostring(item.date or '')))
+                        imgui.Spacing()
+                        imgui.TextWrapped(tostring(item.text or ''))
+                        
+                        if type(item.changes) == "table" then
+                            imgui.Spacing()
+                            imgui.TextDisabled('Список изменений:')
+                            for _, change in ipairs(item.changes) do
+                                imgui.BulletText(tostring(change))
+                            end
+                        end
+                        imgui.Unindent(10)
+                        imgui.Spacing()
+                    end
+                else
+                    imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), string.format("[%s]", tostring(item.date or '')))
+                    imgui.SameLine()
+                    imgui.TextColored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), string.format("%s:", tostring(item.author or 'Dev')))
+                    imgui.SameLine()
+                    imgui.TextWrapped(tostring(item.text or ''))
+                    imgui.Spacing()
+                    imgui.Separator()
+                    imgui.Spacing()
+                end
+            end
+        end
+        imgui.EndChild()
+
+        imgui.Spacing()
+        if imgui.Button('Обновить ленту##feed_refresh', imgui.ImVec2(-1, 24)) then
+            check_updates_and_feed()
+        end
+
+        imgui.EndChild()
+        imgui.PopStyleColor() -- Возвращаем стиль цвета для правой колонки
+
+        -- Возвращаем стандартный стиль отступов окна
+        imgui.PopStyleVar()
 
         imgui.End()
     end
 )
-
-function sampev.onShowDialog(id, style, title, b1, b2, text)
-    title = cyr:decode(title)
-    text  = cyr:decode(text)
-
-    if title:find('Выбор места спавна') then
-        local parsed = {}
-        for n in text:gmatch('[^\r\n]+') do
-            local line = n:match('%[%d+%] %{ffffff%}%s*(.+)')
-            if line then
-                if line:find('Сохраненная точка') then
-                    table.insert(parsed, 'Сохраненная точка')
-                else
-                    table.insert(parsed, line)
-                end
-            else
-                table.insert(parsed, '')
-            end
-        end
-
-        settings.last_spawn_dialog = parsed
-        save_settings()
-
-        if settings.enabled then
-            for i = 1, #settings.priority do
-                local pri = settings.priority[i]
-                for idx = 1, #parsed do
-                    if parsed[idx] == pri then
-                        local response_index = idx - 1
-                        local delay_ms = settings.delay * 1000
-
-                        lua_thread.create(function()
-                            local waited = 0
-                            local step = 100
-
-                            while waited < delay_ms do
-                                wait(step)
-                                waited = waited + step
-
-                                if not (sampIsDialogActive() and sampGetCurrentDialogId() == id) then
-                                    return
-                                end
-                            end
-
-                            sampSendDialogResponse(id, 1, response_index, '')
-                            if sampIsDialogActive() then
-                                sampCloseCurrentDialogWithButton(1)
-                            end
-                        end)
-
-                        return
-                    end
-                end
-            end
-        end
-    end
-end
 
 function onReceivePacket(id, bs)
     if id == PACKET_DISCONNECTION_NOTIFICATION then
@@ -833,11 +812,13 @@ function main()
     while not isSampAvailable() do wait(0) end
     sampAddChatMessage(cyr('[DH] загружен'), 0xffcccccc)
 
-    -- Автоматическая проверка сообщений и обновлений при старте
-    check_updates_and_chat()
+    check_updates_and_feed()
 
     sampRegisterChatCommand('dh', function()
         window[0] = not window[0]
+        if window[0] then
+            info_window[0] = true
+        end
     end)
 
     lua_thread.create(function()
@@ -936,8 +917,9 @@ end
 local VK_ESCAPE = 0x1B
 
 addEventHandler('onWindowMessage', function(msg, wparam, lparam)
-    if window[0] and msg == 0x0100 and wparam == VK_ESCAPE then
+    if (window[0] or info_window[0]) and msg == 0x0100 and wparam == VK_ESCAPE then
         window[0] = false
+        info_window[0] = false
         consumeWindowMessage(true, false)
     end
 
@@ -949,14 +931,6 @@ addEventHandler('onWindowMessage', function(msg, wparam, lparam)
         is_c_pressed = false
     end
 end)
-
-function imgui.CenterText(text)
-    local width = imgui.GetWindowWidth()
-    local calc = imgui.CalcTextSize(text)
-    imgui.SetCursorPosX(width / 2 - calc.x / 2)
-    imgui.Text(text)
-    imgui.SetCursorPosY(imgui.GetCursorPosY() + 8)
-end
 
 function imgui.SectionTitle(text)
     imgui.TextColored(imgui.ImVec4(0.82, 0.82, 0.82, 1.00), text)
