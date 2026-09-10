@@ -1,4 +1,4 @@
-local CURRENT_VERSION = '4.2.8'
+local CURRENT_VERSION = '4.2.8' --Спайди гей
 
 script_name('DH')
 script_version(CURRENT_VERSION)
@@ -21,7 +21,6 @@ local window
 local info_window = imgui.new.bool(true) -- Окно новостей/обновлений открыто по умолчанию
 
 local graffitiFont = renderCreateFont("ShellyAllegroC", 8, 5)
-local zakladkaFont  = renderCreateFont("ShellyAllegroC", 8, 5)
 local nextAutoClick = 0
 
 -- Данные обновлений и сообщений
@@ -99,7 +98,6 @@ local settings = jsoncfg.load({
 
     graffiti_render_enabled    = false,
     graffiti_autoclick_enabled = true,
-    zakladka_render_enabled    = false,
 }, generate_path('config/DH.json'))
 
 if type(settings.priority) ~= 'table' then settings.priority = {} end
@@ -118,7 +116,6 @@ if type(settings.reconnect_delay_banned) ~= 'number' then settings.reconnect_del
 if type(settings.super_stop_enabled) ~= 'boolean' then settings.super_stop_enabled = false end
 if type(settings.graffiti_render_enabled) ~= 'boolean' then settings.graffiti_render_enabled = false end
 if type(settings.graffiti_autoclick_enabled) ~= 'boolean' then settings.graffiti_autoclick_enabled = true end
-if type(settings.zakladka_render_enabled) ~= 'boolean' then settings.zakladka_render_enabled = false end
 
 local function save_settings()
     jsoncfg.save(settings, generate_path('config/DH.json'))
@@ -417,7 +414,6 @@ local super_stop_enabled  = imgui.new.bool(settings.super_stop_enabled == true)
 
 local graffiti_render_enabled    = imgui.new.bool(settings.graffiti_render_enabled == true)
 local graffiti_autoclick_enabled = imgui.new.bool(settings.graffiti_autoclick_enabled == true)
-local zakladka_render_enabled    = imgui.new.bool(settings.zakladka_render_enabled == true)
 
 local drag_mode = nil
 local drag_priority_index = nil
@@ -758,7 +754,7 @@ local newFrame = imgui.OnFrame(
             imgui.EndTabItem()
         end
 
-        if imgui.BeginTabItem('Графити') then
+        if imgui.BeginTabItem('РКН') then
             imgui.Spacing()
 
             if imgui.Checkbox('Отрисовка графити', graffiti_render_enabled) then
@@ -781,12 +777,6 @@ local newFrame = imgui.OnFrame(
             imgui.Spacing()
             imgui.Separator()
             imgui.Spacing()
-
-            if imgui.Checkbox('Отрисовка закладок', zakladka_render_enabled) then
-                settings.zakladka_render_enabled = zakladka_render_enabled[0]
-                save_settings()
-            end
-            imgui.TextDisabled('Рисует линии и подписи до закладок.')
 
             imgui.EndTabItem()
         end
@@ -851,8 +841,8 @@ local newFrame = imgui.OnFrame(
             imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.25, 0.65, 0.30, 1.00))
 
             local btn_text = is_updating
-                and cyr('Обновление...##self_update')
-                or cyr(string.format('Обновить скрипт до v%s##self_update', tostring(latest_version)))
+                and 'Обновление...##self_update'
+                or string.format('Обновить скрипт до v%s##self_update', tostring(latest_version))
 
             if imgui.Button(btn_text, imgui.ImVec2(-1, 26)) and not is_updating then
                 download_update(update_url)
@@ -982,22 +972,6 @@ function main()
                             renderDrawLine(graffitiScreenX, graffitiScreenY, playerScreenX, playerScreenY, 1.5, gang.color)
                             renderFontDrawText(graffitiFont, string.format("%s [%.1fm]", label, distance), graffitiScreenX + 5, graffitiScreenY - 12, gang.color)
                         end
-                    end
-                end
-            end
-        end
-
-        if settings.zakladka_render_enabled then
-            for textLabelId = 0, 2048 do
-                if sampIs3dTextDefined(textLabelId) then
-                    local text, _, zakladkaX, zakladkaY, zakladkaZ = sampGet3dTextInfoById(textLabelId)
-                    if text and text:find("Закладка", 1, true) and isPointOnScreen(zakladkaX, zakladkaY, zakladkaZ, 3.0) then
-                        local playerX, playerY, playerZ = getCharCoordinates(PLAYER_PED)
-                        local zakladkaScreenX, zakladkaScreenY = convert3DCoordsToScreen(zakladkaX, zakladkaY, zakladkaZ)
-                        local playerScreenX, playerScreenY = convert3DCoordsToScreen(playerX, playerY, playerZ)
-
-                        renderDrawLine(zakladkaScreenX, zakladkaScreenY, playerScreenX, playerScreenY, 1.5, 0xFF9fd166)
-                        renderFontDrawText(zakladkaFont, "{9fd166}Закладка", zakladkaScreenX, zakladkaScreenY, -1)
                     end
                 end
             end
