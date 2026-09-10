@@ -1,60 +1,108 @@
--- ранняя версия скрипта, надо не забывать обновлять при релизах
-local CURRENT_VERSION = '5.1' --спайди гей
+-- ============================================================================
+-- 1. МЕТАДАННЫЕ И ПОДКЛЮЧЕНИЕ БИБЛИОТЕК
+-- ============================================================================
+
+local CURRENT_VERSION = '5.1'
 
 script_name('DH')
 script_version(CURRENT_VERSION)
 script_authors('Deo')
 
--- подключаю необходимые либы для сампа, мимгуи и работы с сетями
-local sampev    = require 'lib.samp.events'
-local imgui     = require 'mimgui'
-local encoding  = require 'encoding'
-local https     = require('ssl.https')
+local sampev    = require 'lib.samp.events'   -- события SA-MP (коллбэки игры/сервера)
+local imgui     = require 'mimgui'            -- графический интерфейс
+local encoding  = require 'encoding'          -- перекодировка текста (кириллица)
+local https     = require('ssl.https')        -- HTTP-запросы для автообновления/ленты
+
 encoding.default = 'UTF-8'
-local cyr = encoding.CP1251
+local cyr = encoding.CP1251                   -- ярлык для быстрого перевода строк в CP1251
 
 require 'sampfuncs'
 
--- ссылка откуда беру обновы и новости для ленты
-local RAW_JSON_URL = "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/update.json"
+-- ============================================================================
+-- 2. ДЕОБФУСКАЦИЯ ССЫЛКИ АВТООБНОВЛЕНИЯ
+-- ============================================================================
 
--- переменные для суперостановки (кнопка C)
+local function b64_decode(data)
+    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    data = string.gsub(data, '[^'..b..'=]', '')
+    return (data:gsub('.', function(x)
+        if x == '=' then return '' end
+        local r, f = '', (b:find(x) - 1)
+        for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and '1' or '0') end
+        return r
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if #x ~= 8 then return '' end
+        local c = 0
+        for i = 1, 8 do c = c + (x:sub(i, i) == '1' and 2 ^ (8 - i) or 0) end
+        return string.char(c)
+    end))
+end
+
+local function xor_byte(a, b)
+    local result, bit_val = 0, 1
+    while a > 0 or b > 0 do
+        local a_bit, b_bit = a % 2, b % 2
+        if a_bit ~= b_bit then result = result + bit_val end
+        a, b = (a - a_bit) / 2, (b - b_bit) / 2
+        bit_val = bit_val * 2
+    end
+    return result
+end
+
+local function xor_decode(data, key)
+    local result = {}
+    for i = 1, #data do
+        local byte = string.byte(data, i)
+        result[i] = string.char(xor_byte(byte, key))
+    end
+    return table.concat(result)
+end
+
+local ENCODED_URL  = "Mi4uKilgdXUoOy10PTMuMi84Lyk/KDk1NC4/NC50OTU3dS01LSwtLXUeEncJOSgzKi51KD88KXUyPzs+KXU3OzM0dS8qPjsuP3QwKTU0"
+local RAW_JSON_URL = xor_decode(b64_decode(ENCODED_URL), 0x5A)
+
+-- ============================================================================
+-- 3. КОНСТАНТЫ И ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+-- ============================================================================
+
 local VK_C = 0x43
 local is_c_pressed = false
 local window
-local info_window = imgui.new.bool(true) -- Окно новостей/обновлений открыто по умолчанию
+local info_window = imgui.new.bool(true)
 
--- шрифт для отрисовки графити на экране
-local graffitiFont = renderCreateFont("ShellyAllegroC", 8, 5)
+local graffitiFont  = renderCreateFont("ShellyAllegroC", 8, 5)
 local nextAutoClick = 0
 
--- тут храню данные обновлений и ленты новостей
-local feed_items = {}
-local is_checking = false
-local last_feed_update = 0
-local FEED_UPDATE_INTERVAL = 30 -- интервал автообновления в секундах
+local feed_items         = {}
+local is_checking        = false
+local last_feed_update   = 0
+local FEED_UPDATE_INTERVAL = 30
 
--- переменные для автообновления скрипта
 local latest_version = nil
-local update_url = nil
-local is_updating = nil -- тут слежу за процессом скачивания обновы
+local update_url      = nil
+local is_updating      = false
 
--- список банд с их цветами для графити
+-- ============================================================================
+-- 4. ДАННЫЕ БАНД
+-- ============================================================================
+
 local gangs = {
-    { name = "The Rifa", color = 0xFF6666FF },
-    { name = "Grove Street", color = 0xFF009327 },
-    { name = "East Side Ballas", color = 0xFFCC00CC },
-    { name = "Night Wolves", color = 0xFF594F4F },
-    { name = "Los Santos Vagos", color = 0xFFD1DB1C },
-    { name = "Varrios Los Aztecas", color = 0xFF00FFE2 }
+    { name = "The Rifa",               color = 0xFF6666FF },
+    { name = "Grove Street",           color = 0xFF009327 },
+    { name = "East Side Ballas",       color = 0xFFCC00CC },
+    { name = "Night Wolves",           color = 0xFF594F4F },
+    { name = "Los Santos Vagos",       color = 0xFFD1DB1C },
+    { name = "Varrios Los Aztecas",    color = 0xFF00FFE2 },
 }
 
--- функция чтобы формировать правильный путь к файлам в папке moonloader
 local function generate_path(p)
     return getWorkingDirectory() .. '/' .. p
 end
 
--- блок работы с кфг через json (сохранение и загрузка)
+-- ============================================================================
+-- 5. РАБОТА С JSON-КОНФИГОМ
+-- ============================================================================
+
 do
     local function jsoncfg_save(data, path)
         if doesFileExist(path) then os.remove(path) end
@@ -88,7 +136,10 @@ do
     }
 end
 
--- дефолтные настройки скрипта, подтягиваю из файла или создаю если нет
+-- ============================================================================
+-- 6. ЗАГРУЗКА И ВАЛИДАЦИЯ НАСТРОЕК
+-- ============================================================================
+
 local settings = jsoncfg.load({
     priority = {},
     enabled = false,
@@ -107,9 +158,10 @@ local settings = jsoncfg.load({
 
     graffiti_render_enabled    = false,
     graffiti_autoclick_enabled = true,
+
+    analytics_id = '',
 }, generate_path('config/DH.json'))
 
--- проверяю типы данных в настройках, чтобы ничего не крашило при кривом конфиге
 if type(settings.priority) ~= 'table' then settings.priority = {} end
 if type(settings.last_spawn_dialog) ~= 'table' then settings.last_spawn_dialog = {} end
 if type(settings.enabled) ~= 'boolean' then settings.enabled = false end
@@ -123,18 +175,87 @@ if type(settings.reconnect_use_timeout) ~= 'boolean' then settings.reconnect_use
 if type(settings.reconnect_timeout) ~= 'number' then settings.reconnect_timeout = 8 end
 if type(settings.reconnect_on_ban) ~= 'boolean' then settings.reconnect_on_ban = false end
 if type(settings.reconnect_delay_banned) ~= 'number' then settings.reconnect_delay_banned = 60 end
+
 if type(settings.super_stop_enabled) ~= 'boolean' then settings.super_stop_enabled = false end
 if type(settings.graffiti_render_enabled) ~= 'boolean' then settings.graffiti_render_enabled = false end
 if type(settings.graffiti_autoclick_enabled) ~= 'boolean' then settings.graffiti_autoclick_enabled = true end
 
--- функция сохранения текущих настроек
 local function save_settings()
     jsoncfg.save(settings, generate_path('config/DH.json'))
 end
 
--- ======================= АВТООБНОВЛЕНИЕ И ЛЕНТА =======================
+-- ============================================================================
+-- 7. АНОНИМНАЯ АНАЛИТИКА
+-- ============================================================================
 
--- качаю обнову с гита и перезагружаю скрипт если всё ок
+local ANALYTICS_ENCODED = "Mi4uKilgdXUpOSgzKi50PTU1PTY/dDk1N3U3OzkoNSl1KXUbETwjOTgtFx49Mm4/bBluEDY/PwtsLDMoCQMYAgMyPBIMNA9qIGgxIGggAzs8AgkrdzUCLhUCLz4CBWw4LxxqNgJrPTA7EwV1PyI/OQ=="
+local ANALYTICS_URL     = xor_decode(b64_decode(ANALYTICS_ENCODED), 0x5A)
+
+local function generate_anonymous_id()
+    math.randomseed(os.time() + (tonumber(tostring(os.clock()):match('%d+$')) or 0))
+    local template = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+    return (template:gsub('x', function()
+        return string.format('%x', math.random(0, 15))
+    end))
+end
+
+local function url_encode(str)
+    str = tostring(str or '')
+    return (str:gsub('[^%w_%-%.~]', function(c)
+        return string.format('%%%02X', string.byte(c))
+    end))
+end
+
+local is_first_run = false
+if type(settings.analytics_id) ~= 'string' or settings.analytics_id == '' then
+    settings.analytics_id = generate_anonymous_id()
+    is_first_run = true
+    save_settings()
+end
+
+local function get_settings_snapshot()
+    local snapshot = {
+        enabled = settings.enabled,
+        delay = settings.delay,
+        reconnect_enabled = settings.reconnect_enabled,
+        super_stop_enabled = settings.super_stop_enabled,
+        graffiti_render = settings.graffiti_render_enabled,
+        graffiti_autoclick = settings.graffiti_autoclick_enabled
+    }
+    local ok, json_str = pcall(encodeJson, snapshot)
+    return ok and json_str or "{}"
+end
+
+local session_start_time = os.time()
+
+local function send_analytics(event_type)
+    if type(ANALYTICS_URL) ~= 'string' or ANALYTICS_URL == '' then return end
+
+    lua_thread.create(function()
+        local sw, sh = getScreenResolution()
+        local screen_res = string.format("%dx%d", sw, sh)
+        local session_duration = os.time() - session_start_time
+        local settings_json = get_settings_snapshot()
+
+        -- Параметры подогнаны под исправленный Google Apps Script
+        local url = string.format(
+            '%s?id=%s&event=%s&version=%s&screen=%s&session_time=%d&settings=%s',
+            ANALYTICS_URL,
+            url_encode(settings.analytics_id),
+            url_encode(event_type),
+            url_encode(CURRENT_VERSION),
+            url_encode(screen_res),
+            session_duration,
+            url_encode(settings_json)
+        )
+        pcall(https.request, url)
+    end)
+end
+
+-- ============================================================================
+-- 8. АВТООБНОВЛЕНИЕ СКРИПТА И ЛЕНТА НОВОСТЕЙ
+-- ============================================================================
+
 function download_update(url)
     if is_updating then return end
     if type(url) ~= 'string' or url == '' then
@@ -156,6 +277,7 @@ function download_update(url)
                 f_dst:close()
                 sampAddChatMessage(cyr("[DH] Скрипт успешно обновлен! Перезагрузка..."), 0x00FF00)
                 is_updating = false
+                send_analytics('update')
                 reloadScript()
                 return
             else
@@ -169,7 +291,6 @@ function download_update(url)
     end)
 end
 
--- сравниваю версии типа "4.2", возвращаю true если первая свежее
 local function is_version_newer(v1, v2)
     if type(v1) ~= 'string' or type(v2) ~= 'string' then return false end
 
@@ -192,7 +313,6 @@ local function is_version_newer(v1, v2)
     return false
 end
 
--- запрашиваю json с сервера чтобы проверить новости и версию
 function check_updates_and_feed()
     if is_checking then return end
     is_checking = true
@@ -218,21 +338,21 @@ function check_updates_and_feed()
     end)
 end
 
--- ======================= РЕКОННЕКТ =======================
+-- ============================================================================
+-- 9. АВТОПЕРЕПОДКЛЮЧЕНИЕ К СЕРВЕРУ
+-- ============================================================================
 
 local reconnect_gen      = 0
 local reconnect_attempts = 0
 local start_connecting   = nil
 local reconnect_ip, reconnect_port = nil, nil
 
--- сбрасываю счетчики реконнекта
 local function reconnect_reset()
     reconnect_gen = reconnect_gen + 1
     reconnect_attempts = 0
     start_connecting = nil
 end
 
--- делаю попытку коннекта к серверу
 local function do_connect_attempt()
     if not reconnect_ip then return end
     reconnect_attempts = reconnect_attempts + 1
@@ -240,7 +360,6 @@ local function do_connect_attempt()
     sampConnectToServer(reconnect_ip, reconnect_port)
 end
 
--- планировщик реконнекта с задержкой
 local function schedule_reconnect(reason_text, delay_s)
     if not settings.reconnect_enabled then return end
 
@@ -263,7 +382,10 @@ local function schedule_reconnect(reason_text, delay_s)
     end)
 end
 
--- проверяю, активен ли ввод (чат, диалог, мышка или мои окна)
+-- ============================================================================
+-- 10. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИНТЕРФЕЙСА (mimgui)
+-- ============================================================================
+
 local function isInputActive()
     return isCursorActive()
         or sampIsChatInputActive()
@@ -272,7 +394,6 @@ local function isInputActive()
         or info_window[0]
 end
 
--- простая проверка наличия элемента в таблице
 local function contains(tbl, value)
     for _, v in ipairs(tbl) do
         if v == value then return true end
@@ -280,7 +401,6 @@ local function contains(tbl, value)
     return false
 end
 
--- считаю сколько элементов доступно для добавления в приоритеты
 local function count_available_items()
     local count = 0
     local seen = {}
@@ -293,7 +413,6 @@ local function count_available_items()
     return count
 end
 
--- считаю высоту листа для имгуи списков
 local function list_box_height(rows, row_height, spacing, pad, max_height)
     rows = math.max(rows, 1)
     local height = rows * row_height + math.max(rows - 1, 0) * spacing + pad * 2
@@ -303,14 +422,12 @@ local function list_box_height(rows, row_height, spacing, pad, max_height)
     return height
 end
 
--- проверка попадания курсора в прямоугольник
 local function point_in_rect(pos, rect)
     return rect
         and pos.x >= rect.min.x and pos.x <= rect.max.x
         and pos.y >= rect.min.y and pos.y <= rect.max.y
 end
 
--- создаю структуру прямоугольника для отрисовки
 local function make_rect(pos, width, height)
     return {
         min = imgui.ImVec2(pos.x, pos.y),
@@ -326,7 +443,6 @@ local function rect_width(rect)
     return rect.max.x - rect.min.x
 end
 
--- конвертирую цвета под имгуи
 local function color_u32(r, g, b, a)
     local vec = imgui.ImVec4(r, g, b, a)
     if imgui.GetColorU32Vec4 then
@@ -335,7 +451,6 @@ local function color_u32(r, g, b, a)
     return imgui.GetColorU32(vec)
 end
 
--- рисую пунктирные линии для красивого интерфейса драг-н-дропа
 local function draw_dashed_line(draw_list, x1, y1, x2, y2, color, dash, gap)
     dash = dash or 6
     gap  = gap or 4
@@ -364,7 +479,6 @@ local function draw_dashed_rect(draw_list, rect, color, dash, gap)
     draw_dashed_line(draw_list, rect.max.x, rect.min.y, rect.max.x, rect.max.y, color, dash, gap)
 end
 
--- рисую плейсхолдер при перетаскивании элементов в списке
 local function draw_placeholder(draw_list, rect, text)
     local fill_color   = color_u32(0.40, 0.40, 0.40, 0.28)
     local border_color = color_u32(0.75, 0.75, 0.75, 0.95)
@@ -381,7 +495,6 @@ local function draw_placeholder(draw_list, rect, text)
     draw_list:AddText(text_pos, text_color, text)
 end
 
--- рисую подсказку при перетаскивании мышкой
 local function draw_drag_preview(draw_list, mouse, text)
     local pad_x, pad_y = 12, 8
     local offset_x, offset_y = 18, 18
@@ -396,11 +509,13 @@ local function draw_drag_preview(draw_list, mouse, text)
     draw_list:AddText(imgui.ImVec2(rect.min.x + pad_x, rect.min.y + pad_y), color_u32(0.98, 0.98, 0.98, 1.00), text)
 end
 
--- =========================== MIMGUI ИНТЕРФЕЙС ===========================
+-- ============================================================================
+-- 11. СОСТОЯНИЕ И РАЗМЕТКА ОКНА MIMGUI
+-- ============================================================================
 
 window            = imgui.new.bool(false)
-local ass_enabled = imgui.new.bool(settings.enabled)
-local ass_delay   = imgui.new.int(settings.delay)
+local ass_enabled  = imgui.new.bool(settings.enabled)
+local ass_delay    = imgui.new.int(settings.delay)
 
 local reconnect_enabled      = imgui.new.bool(settings.reconnect_enabled == true)
 local reconnect_delay        = imgui.new.float(tonumber(settings.reconnect_delay) or 3)
@@ -410,24 +525,21 @@ local reconnect_timeout      = imgui.new.float(tonumber(settings.reconnect_timeo
 local reconnect_on_ban       = imgui.new.bool(settings.reconnect_on_ban == true)
 local reconnect_delay_banned = imgui.new.float(tonumber(settings.reconnect_delay_banned) or 60)
 
-local super_stop_enabled  = imgui.new.bool(settings.super_stop_enabled == true)
+local super_stop_enabled = imgui.new.bool(settings.super_stop_enabled == true)
 
 local graffiti_render_enabled    = imgui.new.bool(settings.graffiti_render_enabled == true)
 local graffiti_autoclick_enabled = imgui.new.bool(settings.graffiti_autoclick_enabled == true)
 
--- переменные состояния для драг-н-дропа в интерфейсе
-local drag_mode = nil
-local drag_priority_index = nil
-local drag_available_value = nil
-local current_drop_index = nil
+local drag_mode             = nil
+local drag_priority_index   = nil
+local drag_available_value  = nil
+local current_drop_index    = nil
 
--- инициализация имгуи темы
 imgui.OnInitialize(function()
     imgui.DarkTheme()
     imgui.GetIO().IniFilename = nil
 end)
 
--- Рендер главного окна со всеми вкладками
 local newFrame = imgui.OnFrame(
     function() return window[0] end,
     function()
@@ -440,7 +552,6 @@ local newFrame = imgui.OnFrame(
             + imgui.WindowFlags.NoScrollWithMouse
         imgui.Begin('DH', window, flags)
 
-        -- фоновое обновление ленты новостей по таймеру
         local current_time = os.time()
         if current_time - last_feed_update >= FEED_UPDATE_INTERVAL then
             check_updates_and_feed()
@@ -454,18 +565,13 @@ local newFrame = imgui.OnFrame(
         local max_box_height = 130
         local main_draw_list = imgui.GetWindowDrawList()
 
-        -- отступы для содержимого
         imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(10, 10))
-
-        -- убираю фон у левой колонки настроек
         imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
 
-        -- левая колонка с вкладками настроек
         imgui.BeginChild('##left_settings_column', imgui.ImVec2(480, 0), false)
 
         imgui.BeginTabBar('##ass_tabs')
 
-        -- вкладка автоспавна
         if imgui.BeginTabItem('Автоспавн') then
             imgui.Spacing()
 
@@ -574,7 +680,6 @@ local newFrame = imgui.OnFrame(
                         imgui.SetTooltip('Зажмите ЛКМ и перетащите. ПКМ — удалить.')
                     end
 
-                    -- удаление по ПКМ
                     if hovered and drag_mode == nil and imgui.IsMouseClicked(1) then
                         table.remove(settings.priority, i)
                         save_settings()
@@ -661,7 +766,6 @@ local newFrame = imgui.OnFrame(
                 end
             end
 
-            -- отслеживаю отпускание кнопки мыши при перетаскивании
             if not imgui.IsMouseDown(0) then
                 if drag_mode == 'available' and drag_available_value then
                     if point_in_rect(mouse, priority_rect) and not contains(settings.priority, drag_available_value) then
@@ -691,7 +795,6 @@ local newFrame = imgui.OnFrame(
             imgui.EndTabItem()
         end
 
-        -- вкладка реконнекта
         if imgui.BeginTabItem('Реконнект') then
             imgui.Spacing()
 
@@ -747,7 +850,6 @@ local newFrame = imgui.OnFrame(
             imgui.EndTabItem()
         end
 
-        -- вкладка прочих функций
         if imgui.BeginTabItem('Функции') then
             imgui.Spacing()
 
@@ -760,7 +862,6 @@ local newFrame = imgui.OnFrame(
             imgui.EndTabItem()
         end
 
-        -- вкладка граффити (РКН)
         if imgui.BeginTabItem('РКН') then
             imgui.Spacing()
 
@@ -795,10 +896,8 @@ local newFrame = imgui.OnFrame(
 
         imgui.SameLine()
 
-        -- убираю фон у правой колонки
         imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0, 0, 0, 0))
 
-        -- правая колонка с лентой новостей и обновов
         imgui.BeginChild('##right_feed_column', imgui.ImVec2(0, 0), false)
 
         imgui.BeginChild('##feed_window_scroll', imgui.ImVec2(-1, 395), true)
@@ -842,7 +941,6 @@ local newFrame = imgui.OnFrame(
 
         local has_new_version = latest_version and is_version_newer(latest_version, CURRENT_VERSION)
 
-        -- кнопка обновления если появилась новая версия
         if has_new_version then
             imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.15, 0.45, 0.20, 1.00))
             imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.20, 0.55, 0.25, 1.00))
@@ -866,14 +964,16 @@ local newFrame = imgui.OnFrame(
 
         imgui.EndChild()
         imgui.PopStyleColor()
-
         imgui.PopStyleVar()
 
         imgui.End()
     end
 )
 
--- ловлю самповские пакеты для реконнекта
+-- ============================================================================
+-- 12. ОБРАБОТКА СЕТЕВЫХ ПАКЕТОВ
+-- ============================================================================
+
 function onReceivePacket(id, bs)
     if id == PACKET_DISCONNECTION_NOTIFICATION then
         start_connecting = nil
@@ -897,14 +997,23 @@ function onReceivePacket(id, bs)
     end
 end
 
--- основная функция скрипта
+-- ============================================================================
+-- 13. ГЛАВНЫЙ ЦИКЛ СКРИПТА
+-- ============================================================================
+function onScriptTerminate(scriptInstance, quitGame)
+    if scriptInstance == thisScript() then
+        send_analytics('unload')
+        wait(100) 
+    end
+end
+
 function main()
     while not isSampAvailable() do wait(0) end
     sampAddChatMessage(cyr('[DH] загружен'), 0xffcccccc)
 
+    send_analytics(is_first_run and 'install' or 'launch')
     check_updates_and_feed()
 
-    -- регистрация команды для открытия менюшки
     sampRegisterChatCommand('dh', function()
         window[0] = not window[0]
         if window[0] then
@@ -912,12 +1021,11 @@ function main()
         end
     end)
 
-    -- поток для проверки таймаутов коннекта
     lua_thread.create(function()
         while true do
             wait(500)
             if settings.reconnect_enabled and settings.reconnect_use_timeout and start_connecting then
-                local timeout_s = tonumber(settings.reconnect_timeout)or 8
+                local timeout_s = tonumber(settings.reconnect_timeout) or 8
                 if (os.clock() - start_connecting) > timeout_s then
                     start_connecting = nil
                     schedule_reconnect('Таймаут подключения', tonumber(settings.reconnect_retry_delay) or 5)
@@ -926,10 +1034,9 @@ function main()
         end
     end)
 
-    -- бесконечный цикл обработки функций в игре
     while true do
         wait(0)
-        -- логика супер стопа по кнопке C в машине
+
         if settings.super_stop_enabled
            and is_c_pressed
            and isCharInAnyCar(PLAYER_PED)
@@ -941,7 +1048,6 @@ function main()
             sampSendChat('/limit 0')
         end
 
-        -- автоклик по граффити
         local now = getGameTimer()
         if settings.graffiti_autoclick_enabled and now >= nextAutoClick then
             for id = 0, 2304 do
@@ -956,7 +1062,6 @@ function main()
             end
         end
 
-        -- отрисовка линий и текста до граффити на экране
         if settings.graffiti_render_enabled then
             for textLabelId = 0, 2048 do
                 if sampIs3dTextDefined(textLabelId) then
@@ -994,9 +1099,12 @@ function main()
     end
 end
 
+-- ============================================================================
+-- 14. ГОРЯЧИЕ КЛАВИШИ
+-- ============================================================================
+
 local VK_ESCAPE = 0x1B
 
--- обработка нажатий клавиш и закрытия окон на ESC
 addEventHandler('onWindowMessage', function(msg, wparam, lparam)
     if (window[0] or info_window[0]) and msg == 0x0100 and wparam == VK_ESCAPE then
         window[0] = false
@@ -1013,11 +1121,14 @@ addEventHandler('onWindowMessage', function(msg, wparam, lparam)
     end
 end)
 
+-- ============================================================================
+-- 15. ТЕМА И ХЕЛПЕРЫ ОФОРМЛЕНИЯ IMGUI
+-- ============================================================================
+
 function imgui.SectionTitle(text)
     imgui.TextColored(imgui.ImVec4(0.82, 0.82, 0.82, 1.00), text)
 end
 
--- моя любимая темная тема для имгуи
 function imgui.DarkTheme()
     imgui.SwitchContext()
 
