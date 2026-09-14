@@ -1,10 +1,10 @@
 {
-  "latest_version": "5.4",
+  "latest_version": "5.5",
   "update_url": "https://raw.githubusercontent.com/wowvww/DH-Script/refs/heads/main/DH.lua",
   "feed_items": [
     {
       "type": "update",
-      "version": "5.4",
+      "version": "5.5",
       "date": "14.09.2026",
       "text": "Добавлена система аккаунтов с привязкой к HWID",
       "changes": ["Добавлена система аккаунтов", "Добавлена привязка аккаунта к HWID", "Добавлена проверка HWID при авторизации", "Добавлена защита от использования аккаунта на другом устройстве"]
