@@ -1,17 +1,21 @@
 -- ============================================================================
 -- 1. МЕТАДАННЫЕ И ПОДКЛЮЧЕНИЕ БИБЛИОТЕК
 -- ============================================================================
-local CURRENT_VERSION = '5.4'
+
+local CURRENT_VERSION = '5.5'
+
 script_name('DH')
 script_version(CURRENT_VERSION)
 script_authors('Deo')
+
 local sampev    = require 'lib.samp.events'
 local imgui     = require 'mimgui'
 local encoding  = require 'encoding'
 local https     = require('ssl.https')
-local ffi       = require 'ffi'
+
 encoding.default = 'UTF-8'
 local cyr = encoding.CP1251
+
 require 'sampfuncs'
 
 -- ============================================================================
