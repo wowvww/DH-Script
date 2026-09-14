@@ -12,6 +12,7 @@ local sampev    = require 'lib.samp.events'
 local imgui     = require 'mimgui'
 local encoding  = require 'encoding'
 local https     = require('ssl.https')
+local ffi       = require('ffi')
 
 encoding.default = 'UTF-8'
 local cyr = encoding.CP1251
