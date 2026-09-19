@@ -4,10 +4,10 @@
   "feed_items": [
     {
       "type": "update",
-      "version": "5.9",
-      "date": "-",
-      "text": "-",
-      "changes": ["-"]
+      "version": "6.0.0",
+      "date": "19.09.2026",
+      "text": "6.0.0",
+      "changes": ["6.0.0"]
     },
     {
       "type": "msg",
